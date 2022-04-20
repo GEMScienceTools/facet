@@ -178,9 +178,7 @@ def project_pt_to_plane(pt, plane_normal, plane_pt):
     return pt - np.dot(pt - plane_pt, plane_normal) * plane_normal
 
 
-def get_fault_strike_dip(fault):
-    normal, centroid = fit_plane_to_pts(fault["xc"], fault["yc"], fault["zc"])
-
+def get_strike_dip_from_normal(normal):
     strike = angle_to_az(np.arctan2(normal[1], normal[0])) - 90.0
     while strike > 360.0:
         strike -= 360.0
@@ -188,6 +186,61 @@ def get_fault_strike_dip(fault):
         strike += 360.0
 
     dip = np.degrees(np.arccos(normal.dot([0.0, 0.0, 1.0])))
+
+    return strike, dip
+
+
+def get_strike_vector(strike):
+    # modified from halfspace/projections.py , (c) R. Styron
+    strike_rad = np.radians(strike)
+    return np.array([np.sin(strike_rad), np.cos(strike_rad), 0.0])
+
+
+def get_dip_vector(strike, dip):
+    # modified from halfspace/projections.py , (c) R. Styron
+    norm = get_normal_from_strike_dip(strike, dip)
+    strike_vec = get_strike_vector(strike)
+    return np.cross(norm, strike_vec)
+
+
+def dip_shear_stress_from_tensor(strike, dip, T):
+    # modified from halfspace/projections.py , (c) R. Styron
+    N = get_normal_from_strike_dip(strike, dip)
+    D = get_dip_vector(strike, dip)
+
+    return D @ T @ N.T
+
+
+def strike_shear_stress_from_tensor(strike, dip, T):
+    # modified from halfspace/projections.py , (c) R. Styron
+    N = get_normal_from_strike_dip(strike, dip)
+    S = get_strike_vector(strike)
+
+    return S @ T @ N.T
+
+
+def get_normal_from_strike_dip(strike, dip):
+    # modified from halfspace/projections.py , (c) R. Styron
+    strike_rad = np.radians(strike)
+    dip_rad = np.radians(dip)
+
+    nE = np.sin(dip_rad) * np.cos(strike_rad)
+    nN = -np.sin(dip_rad) * np.sin(strike_rad)
+    nD = np.cos(dip_rad)
+
+    return np.array([nE, nN, nD])
+
+
+def get_rake_from_shear_components(strike_shear, dip_shear):
+    # modified from halfspace/projections.py , (c) R. Styron
+    rake = np.degrees(np.arctan2(dip_shear, -strike_shear))
+    return rake
+
+
+def get_fault_strike_dip(fault):
+    normal, centroid = fit_plane_to_pts(fault["xc"], fault["yc"], fault["zc"])
+
+    strike, dip = get_strike_dip_from_normal(normal)
 
     return strike, dip, normal, centroid
 
@@ -403,3 +456,77 @@ def fault_info_to_gj(fault_info):
     }
 
     return fgj
+
+
+def sorted_eigens(T):
+
+    # modified from halfspace.py (c) R. Styron
+
+    eig_vals, eig_vecs = np.linalg.eigh(T)
+    idx = eig_vals.argsort()[::-1]
+
+    eig_vals = eig_vals[idx]
+    eig_vecs = np.array(eig_vecs[:, idx])
+
+    return eig_vals, eig_vecs
+
+
+def get_optimal_fault_angle_from_s1(friction_angle):
+    return (np.pi / 2.0 - np.radians(friction_angle)) / 2.0
+
+
+def make_stress_tensor(xx, yy, zz, xy, xz, yz):
+    return np.array([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]])
+
+
+def get_fault_rake_from_tensor(strike, dip, T):
+    strike_shear = strike_shear_stress_from_tensor(strike, dip, T)
+    dip_shear = dip_shear_stress_from_tensor(strike, dip, T)
+    rake = get_rake_from_shear_components(strike_shear, dip_shear)
+
+    return rake
+
+
+def get_optimal_fault_plane(T, friction_angle=30):
+    # modified from halfspace.py (c) R. Styron
+    beta = get_optimal_fault_angle_from_s1(friction_angle)
+
+    vals, vecs = sorted_eigens(T)
+
+    opt_plane_normal_vec_rot = np.array([np.cos(beta), 0.0, np.sin(beta)])
+
+    opt_plane_norm = vecs @ opt_plane_normal_vec_rot
+
+    strike, dip = get_strike_dip_from_normal(opt_plane_norm)
+
+    rake = get_fault_rake_from_tensor(strike, dip, T)
+
+    return strike, dip, rake
+
+
+def get_fault_plane_from_pt_stress(row):
+    T = make_stress_tensor(
+        row.stress_xx,
+        row.stress_yy,
+        row.stress_zz,
+        row.stress_xy,
+        row.stress_xz,
+        row.stress_yz,
+    )
+
+    strike, dip = get_optimal_fault_plane(T, row.current_friction_angles)
+    rake = get_fault_rake_from_tensor(strike, dip, T)
+    return strike, dip, rake
+
+
+def make_stress_tensor_from_row(row):
+    stress_tensor = make_stress_tensor(
+        row.stress_xx,
+        row.stress_yy,
+        row.stress_zz,
+        row.stress_xy,
+        row.stress_xz,
+        row.stress_yz,
+    )
+
+    return stress_tensor
