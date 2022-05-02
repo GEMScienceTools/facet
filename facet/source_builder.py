@@ -71,6 +71,29 @@ def get_fault_df(
     return fault_df
 
 
+def get_distributed_elastic_df(
+    field_df,
+    fault_df=None,
+    strain_max=None,
+    strain_min=None,
+    yield_threshold=0.0,
+):
+
+    elastic_df = get_elastic_elements(field_df, yield_threshold=yield_threshold)
+    if fault_df is not None:
+        non_fault_elements = elastic_df.loc[
+            (fid for fid in elastic_df.index if fid not in fault_df.index)
+        ]
+    else:
+        non_fault_elements = elastic_df
+
+    non_fault_strain_elements = get_high_strain_df(
+        non_fault_elements, strain_threshold=strain_min, strain_max=strain_max
+    )
+
+    return non_fault_strain_elements
+
+
 @jit
 def check_array_equal(arr1, arr2):
     equal = True
@@ -264,7 +287,7 @@ def fake_proj_m_to_deg(
         return_vals = (lons, lats)
 
     else:
-        depths_km = -(zs - z0)
+        depths_km = -(zs - z0) / 1000.0
 
         return_vals = (lons, lats, depths_km)
 
@@ -514,8 +537,7 @@ def get_fault_plane_from_pt_stress(row):
         row.stress_yz,
     )
 
-    strike, dip = get_optimal_fault_plane(T, row.current_friction_angles)
-    rake = get_fault_rake_from_tensor(strike, dip, T)
+    strike, dip, rake = get_optimal_fault_plane(T, row.current_friction_angles)
     return strike, dip, rake
 
 
@@ -530,3 +552,39 @@ def make_stress_tensor_from_row(row):
     )
 
     return stress_tensor
+
+
+def make_pt_source_from_row(
+    row, idx=None, proj_function=fake_proj_m_to_deg, return_series=True
+):
+
+    params = {"idx": idx}
+    (
+        params["strike"],
+        params["dip"],
+        params["rake"],
+    ) = get_fault_plane_from_pt_stress(row)
+    params["moment_rate"] = (
+        row["volume"] * row["strain_rate"] * row["elastic_shear_modulus"]
+    )
+
+    params["lon"], params["lat"], params["depth"] = proj_function(
+        row.xc, row.yc, row.zc
+    )
+
+    if return_series is True:
+        return pd.Series(params)
+    else:
+        return params
+
+
+def make_pt_source_df(distributed_df, proj_function=fake_proj_m_to_deg):
+    pt_df = pd.concat(
+        [
+            make_pt_source_from_row(row, idx=i, proj_function=proj_function)
+            for i, row in distributed_df.iterrows()
+        ],
+        axis=1,
+    ).T
+
+    pt_df = pt_df.set_index("idx")

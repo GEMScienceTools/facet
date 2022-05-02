@@ -39,15 +39,17 @@ reload(facet)
 #    ),
 # )
 #
-# distributed_strain_cutoff = 2.0e-15
-# fault_strain_cutoff = 0.1e-13
+distributed_strain_cutoff = 2.0e-15
+fault_strain_cutoff = 0.1e-13
 #
 # fault_df = facet.source_builder.get_fault_df(field_df, fault_strain_cutoff)
 #
 # facet.source_builder.get_fault_groups(fault_df)
 
 field_df = pd.read_csv("~/Desktop/field_df.csv", index_col=0)
+
 fault_df = pd.read_csv("~/Desktop/fault_df.csv", index_col=0)
+
 
 fault_groups = fault_df.groupby(["fault_group"])
 
@@ -81,6 +83,11 @@ def plot_fault_best_fit(fault):
     return
 
 
+distributed_strain_elems = facet.source_builder.get_distributed_elastic_df(
+    field_df, fault_df, strain_min=distributed_strain_cutoff
+)
+
+pt_df = facet.source_builder.make_pt_source_df(distributed_strain_elems)
 # for fault, group in fault_groups:
 #    plot_fault_best_fit(fault)
 
